@@ -13,6 +13,11 @@ param (
 function Update-GlobalJson([string] $Version) {
     $psGlobalJsonPath = Resolve-Path "$PSScriptRoot/../global.json"
     $psGlobalJson = Get-Content -Path $psGlobalJsonPath -Raw | ConvertFrom-Json
+
+    if ($psGlobalJson.sdk.version -eq $Version) {
+        throw '.NET SDK version is not updated'
+    }
+
     $psGlobalJson.sdk.version = $Version
     $psGlobalJson | ConvertTo-Json | Out-File -FilePath $psGlobalJsonPath -Force
 }
@@ -76,7 +81,7 @@ function Update-PackageVersion {
     $versionPattern = (Get-Content "$PSScriptRoot/../DotnetRuntimeMetadata.json" | ConvertFrom-Json).sdk.packageVersionPattern
 
     $packages.GetEnumerator() | ForEach-Object {
-        $pkgs = Find-Package -Name $_.Key -AllVersions -AllowPreReleaseVersions -Source 'dotnet5'
+        $pkgs = Find-Package -Name $_.Key -AllVersions -AllowPrereleaseVersions -Source 'dotnet5'
 
         foreach ($v in $_.Value) {
             $version = $v.Version
@@ -104,7 +109,7 @@ function Update-PackageVersion {
  .DESCRIPTION Update package versions to the latest as per the pattern mentioned in DotnetRuntimeMetadata.json
 #>
 function Update-CsprojFile([string] $path, $values) {
-    $fileContent = Get-Content $path -raw
+    $fileContent = Get-Content $path -Raw
     $updated = $false
 
     foreach ($v in $values) {
@@ -118,7 +123,7 @@ function Update-CsprojFile([string] $path, $values) {
     }
 
     if ($updated) {
-        $fileContent | Out-File -FilePath $path -Force
+        ($fileContent).TrimEnd() | Out-File -FilePath $path -Force
     }
 }
 
@@ -136,7 +141,7 @@ if(-not (Get-PackageSource -Name 'dotnet5' -ErrorAction SilentlyContinue))
 {
     $nugetFeed = ([xml](Get-Content .\nuget.config -Raw)).Configuration.packagesources.add | Where-Object { $_.Key -eq 'dotnet5' } | Select-Object -ExpandProperty Value
     Register-PackageSource -Name 'dotnet5' -Location $nugetFeed -ProviderName NuGet
-    Write-Verbose -Message "Register new package source 'dotnet5'" -verbose
+    Write-Verbose -Message "Register new package source 'dotnet5'" -Verbose
 }
 
 ## Install latest version from the channel
@@ -146,6 +151,16 @@ $sdkVersion = if ($SDKVersionOverride) { $SDKVersionOverride } else { "latest" }
 Install-Dotnet -Channel "$Channel" -Version $sdkVersion
 
 Write-Verbose -Message "Installing .NET SDK completed." -Verbose
+
+$isWindowsEnv = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+
+$dotnetPath = if ($IsWindowsEnv) { "$env:LocalAppData\Microsoft\dotnet" } else { "$env:HOME/.dotnet" }
+
+$pathSep = [System.IO.Path]::PathSeparator
+
+if (-not (($ENV:PATH -split $pathSep) -contains "$dotnetPath")) {
+    $env:PATH = "$dotnetPath" + $pathSep + "$ENV:PATH"
+}
 
 $latestSdkVersion = (dotnet --list-sdks | Select-Object -Last 1 ).Split() | Select-Object -First 1
 
